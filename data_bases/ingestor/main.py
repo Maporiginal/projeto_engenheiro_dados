@@ -46,13 +46,13 @@ def main():
 
     # ---- Postgres ----
     pg = psycopg2.connect(
-        host=env("PG_HOST"), port=int(env("PG_PORT", "15432")),
+        host=env("PG_HOST"), port=int(env("PG_PORT", "5432")),
         dbname=env("PG_DB"), user=env("PG_USER"), password=env("PG_PASS")
     )
 
     # ---- MySQL ----
     my = pymysql.connect(
-        host=env("MYSQL_HOST"), port=int(env("MYSQL_PORT", "13306")),
+        host=env("MYSQL_HOST"), port=int(env("MYSQL_PORT", "3306")),
         database=env("MYSQL_DB"), user=env("MYSQL_USER"), password=env("MYSQL_PASS")
     )
 
