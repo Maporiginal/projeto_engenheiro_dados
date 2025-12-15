@@ -1,25 +1,25 @@
 services:
-  pg_finance:
+  sistema_financeiro:
     image: postgres:16
-    container_name: pg_finance
+    container_name: sistema_financeiro
     environment:
       POSTGRES_USER: ${PG_SUPERUSER}
       POSTGRES_PASSWORD: ${PG_SUPERPASS}
-      POSTGRES_DB: postgres
+      POSTGRES_DB: financeiro
     volumes:
       - pg_finance_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
-      - net_finance
+      - net_sistema_financeiro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER} -d postgres"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-  mysql_sales:
+  sistema_vendas:
     image: mysql:8.4
-    container_name: mysql_sales
+    container_name: sistema_vendas
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: vendas
@@ -30,16 +30,16 @@ services:
       - mysql_sales_data:/var/lib/mysql
       - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
     networks:
-      - net_sales
+      - net_sistema_vendas
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
       interval: 5s
       timeout: 5s
       retries: 30
 
-  mongo_support:
+  sistema_suporte:
     image: mongo:7
-    container_name: mongo_support
+    container_name: sistema_suporte
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
@@ -48,7 +48,7 @@ services:
       - mongo_support_data:/data/db
       - ./docker/mongo/init:/docker-entrypoint-initdb.d:ro
     networks:
-      - net_support
+      - net_sistema_suporte
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --username ${MONGO_ROOT_USER} --password ${MONGO_ROOT_PASS} --eval 'db.adminCommand({ ping: 1 })' admin || exit 1"]
       interval: 5s
@@ -61,36 +61,36 @@ services:
     container_name: ingestor
     environment:
       # Postgres (financeiro)
-      PG_HOST: pg_finance
+      PG_HOST: sistema_financeiro
       PG_PORT: "5432"
       PG_DB: financeiro
       PG_USER: ${PG_APP_USER}
       PG_PASS: ${PG_APP_PASS}
 
       # MySQL (vendas)
-      MYSQL_HOST: mysql_sales
+      MYSQL_HOST: sistema_vendas
       MYSQL_PORT: "3306"
       MYSQL_DB: vendas
       MYSQL_USER: ${MYSQL_APP_USER}
       MYSQL_PASS: ${MYSQL_APP_PASS}
 
       # Mongo (suporte)
-      MONGO_HOST: mongo_support
+      MONGO_HOST: sistema_suporte
       MONGO_PORT: "27017"
       MONGO_DB: suporte
       MONGO_USER: ${MONGO_APP_USER}
       MONGO_PASS: ${MONGO_APP_PASS}
     depends_on:
-      pg_finance:
+      sistema_financeiro:
         condition: service_healthy
-      mysql_sales:
+    sistema_vendas:
         condition: service_healthy
-      mongo_support:
+      sistema_suporte:
         condition: service_healthy
     networks:
-      - net_finance
-      - net_sales
-      - net_support
+      - net_sistema_financeiro
+      - net_sistema_vendas
+      - net_sistema_suporte
 
 volumes:
   pg_finance_data:
@@ -98,9 +98,9 @@ volumes:
   mongo_support_data:
 
 networks:
-  net_finance:
+  net_sistema_financeiro:
     driver: bridge
-  net_sales:
+  net_sistema_vendas:
     driver: bridge
-  net_support:
+  net_sistema_suporte:
     driver: bridge
