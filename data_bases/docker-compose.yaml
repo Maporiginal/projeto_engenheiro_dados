@@ -79,8 +79,8 @@ services:
       PG_HOST: sistema_financeiro
       PG_PORT: "5432"
       PG_DB: financeiro
-      PG_USER: ${PG_APP_USER}
-      PG_PASS: ${PG_APP_PASS}
+      PG_USER: ${PG_SUPERUSER}
+      PG_PASS: ${PG_SUPERPASS}
 
       # MySQL (vendas)
       MYSQL_HOST: sistema_vendas
