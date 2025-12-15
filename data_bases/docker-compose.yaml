@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${PG_SUPERPASS}
       POSTGRES_DB: financeiro
     ports:
-      - "127.0.0.1:15432:5432"
+      - "15432:5432"
     volumes:
       - pg_finance_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
@@ -28,7 +28,7 @@ services:
       MYSQL_USER: ${MYSQL_APP_USER}
       MYSQL_PASSWORD: ${MYSQL_APP_PASS}
     ports:
-      - "127.0.0.1:13306:3306"
+      - "13306:3306"
     #command: ["--default-authentication-plugin=mysql_native_password"]
     volumes:
       - mysql_sales_data:/var/lib/mysql
@@ -49,7 +49,7 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
       MONGO_INITDB_DATABASE: suporte
     ports:
-      - "127.0.0.1:27017:27017"
+      - "27017:27017"
     volumes:
       - mongo_support_data:/data/db
       - ./docker/mongo/init:/docker-entrypoint-initdb.d:ro
