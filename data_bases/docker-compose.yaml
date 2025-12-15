@@ -85,7 +85,7 @@ services:
         condition: service_healthy
     sistema_vendas:
         condition: service_healthy
-      sistema_suporte:
+    sistema_suporte:
         condition: service_healthy
     networks:
       - net_sistema_financeiro
