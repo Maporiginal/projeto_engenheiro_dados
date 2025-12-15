@@ -1,18 +1,21 @@
 import os
-import time
+import io
+import json
 from datetime import datetime, timezone
 
 import psycopg2
-from psycopg2.extras import execute_values, Json
 import pymysql
 from pymongo import MongoClient
+
+import boto3
+import pandas as pd
 
 
 def env(name: str, default: str | None = None) -> str:
     v = os.getenv(name)
-    if v is None or v == "":
+    if not v:
         if default is None:
-            raise RuntimeError(f"Variável de ambiente obrigatória não definida: {name}")
+            raise RuntimeError(f"Variável obrigatória não definida: {name}")
         return default
     return v
 
@@ -21,299 +24,93 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
-def wait_until_ok(fn, name: str, tries: int = 60, sleep_s: int = 2):
-    for i in range(tries):
-        try:
-            fn()
-            print(f"[OK] {name}")
-            return
-        except Exception as e:
-            print(f"[WAIT] {name} ({i+1}/{tries}) -> {e}")
-            time.sleep(sleep_s)
-    raise RuntimeError(f"{name} não ficou disponível a tempo")
+def to_parquet_bytes(df: pd.DataFrame) -> io.BytesIO:
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    buf.seek(0)
+    return buf
 
 
-# -----------------------------
-# EXTRACT
-# -----------------------------
-def extract_clients_pg(pg_conn):
-    """
-    Espera uma tabela: clientes(id, nome, email)
-    """
-    with pg_conn.cursor() as cur:
-        cur.execute("""
-            SELECT id::int, nome::text, email::text
-            FROM clientes
-        """)
-        rows = cur.fetchall()
-    return {cid: {"cliente_id": cid, "nome": nome, "email": email} for (cid, nome, email) in rows}
-
-
-def extract_orders_mysql(mysql_conn):
-    """
-    Espera uma tabela: pedidos(id, cliente_id, valor_total, created_at)
-    Retorna agregados por cliente_id.
-    """
-    sql = """
-        SELECT
-            cliente_id,
-            COUNT(*) AS qtd_pedidos,
-            COALESCE(SUM(valor_total), 0) AS total_gasto,
-            MAX(created_at) AS ultimo_pedido_em
-        FROM pedidos
-        GROUP BY cliente_id
-    """
-    with mysql_conn.cursor() as cur:
-        cur.execute(sql)
-        rows = cur.fetchall()
-
-    agg = {}
-    for (cliente_id, qtd, total, ultimo) in rows:
-        agg[int(cliente_id)] = {
-            "qtd_pedidos": int(qtd),
-            "total_gasto": float(total) if total is not None else 0.0,
-            "ultimo_pedido_em": ultimo.isoformat() if ultimo else None,
-        }
-    return agg
-
-
-def extract_tickets_mongo(mongo_db):
-    """
-    Espera coleção: chamados
-    Estrutura mínima esperada (exemplo):
-      { cliente_id: 1, status: "aberto"|"fechado", interacoes: [{ts: ISODate(...)}, ...] }
-
-    Retorna agregados por cliente_id:
-      qtd_chamados_abertos, ultima_interacao_em, raw (lista resumida)
-    """
-    col = mongo_db["chamados"]
-    docs = col.find({}, {"_id": 0, "cliente_id": 1, "status": 1, "interacoes": 1})
-
-    agg = {}
-    for d in docs:
-        cid = d.get("cliente_id")
-        if cid is None:
-            continue
-        try:
-            cid = int(cid)
-        except Exception:
-            continue
-
-        status = (d.get("status") or "").lower()
-        interacoes = d.get("interacoes") or []
-
-        last_ts = None
-        for it in interacoes:
-            ts = it.get("ts")
-            # pymongo costuma devolver datetime
-            if isinstance(ts, datetime):
-                ts = ts.astimezone(timezone.utc)
-            elif isinstance(ts, str):
-                try:
-                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except Exception:
-                    ts = None
-            else:
-                ts = None
-
-            if ts and (last_ts is None or ts > last_ts):
-                last_ts = ts
-
-        if cid not in agg:
-            agg[cid] = {
-                "qtd_chamados_abertos": 0,
-                "ultima_interacao_em": None,
-                "raw": [],
-            }
-
-        if status == "aberto":
-            agg[cid]["qtd_chamados_abertos"] += 1
-
-        if last_ts:
-            cur_last = agg[cid]["ultima_interacao_em"]
-            if cur_last is None or last_ts > cur_last:
-                agg[cid]["ultima_interacao_em"] = last_ts
-
-        # guarda um resumão do ticket (pra debug/BI)
-        agg[cid]["raw"].append({
-            "status": status,
-            "ultima_interacao_em": last_ts.isoformat() if last_ts else None
-        })
-
-    # normaliza datetime -> iso
-    for cid, v in agg.items():
-        if isinstance(v["ultima_interacao_em"], datetime):
-            v["ultima_interacao_em"] = v["ultima_interacao_em"].isoformat()
-
-    return agg
-
-
-# -----------------------------
-# LOAD (Postgres)
-# -----------------------------
-def ensure_target_table(pg_conn):
-    with pg_conn.cursor() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS customer_360 (
-                cliente_id           INT PRIMARY KEY,
-                nome                 TEXT,
-                email                TEXT,
-                qtd_pedidos          INT,
-                total_gasto          NUMERIC(14,2),
-                ultimo_pedido_em     TIMESTAMPTZ,
-                qtd_chamados_abertos INT,
-                ultima_interacao_em  TIMESTAMPTZ,
-                suporte_raw          JSONB,
-                updated_at           TIMESTAMPTZ NOT NULL
-            )
-        """)
-    pg_conn.commit()
-
-
-def upsert_customer_360(pg_conn, rows: list[tuple]):
-    sql = """
-        INSERT INTO customer_360 (
-            cliente_id, nome, email,
-            qtd_pedidos, total_gasto, ultimo_pedido_em,
-            qtd_chamados_abertos, ultima_interacao_em,
-            suporte_raw, updated_at
-        )
-        VALUES %s
-        ON CONFLICT (cliente_id) DO UPDATE SET
-            nome=EXCLUDED.nome,
-            email=EXCLUDED.email,
-            qtd_pedidos=EXCLUDED.qtd_pedidos,
-            total_gasto=EXCLUDED.total_gasto,
-            ultimo_pedido_em=EXCLUDED.ultimo_pedido_em,
-            qtd_chamados_abertos=EXCLUDED.qtd_chamados_abertos,
-            ultima_interacao_em=EXCLUDED.ultima_interacao_em,
-            suporte_raw=EXCLUDED.suporte_raw,
-            updated_at=EXCLUDED.updated_at
-    """
-    with pg_conn.cursor() as cur:
-        execute_values(cur, sql, rows, page_size=500)
-    pg_conn.commit()
-
-
-def iso_to_timestamptz(iso: str | None):
-    if not iso:
-        return None
-    try:
-        return datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except Exception:
-        return None
+def s3_key(source: str, entity: str, ingestion_date: str, run_id: str) -> str:
+    return f"raw/{source}/{entity}/ingestion_date={ingestion_date}/run_id={run_id}/part-0000.parquet"
 
 
 def main():
-    print("[START] Ingestor (customer_360)")
-    # Postgres
-    pg_host = env("PG_HOST")
-    pg_port = int(env("PG_PORT", "5432"))
-    pg_db   = env("PG_DB")
-    pg_user = env("PG_USER")
-    pg_pass = env("PG_PASS")
+    # ---- AWS/S3 ----
+    bucket = env("S3_BUCKET")
+    region = env("AWS_REGION", "us-east-1")
+    s3 = boto3.client("s3", region_name=region)
 
-    # MySQL
-    my_host = env("MYSQL_HOST")
-    my_port = int(env("MYSQL_PORT", "3306"))
-    my_db   = env("MYSQL_DB")
-    my_user = env("MYSQL_USER")
-    my_pass = env("MYSQL_PASS")
+    ingestion_date = utcnow().date().isoformat()
+    run_id = utcnow().strftime("%Y%m%dT%H%M%SZ")
 
-    # Mongo
-    mo_host = env("MONGO_HOST")
-    mo_port = int(env("MONGO_PORT", "27017"))
-    mo_db   = env("MONGO_DB")
-    mo_user = env("MONGO_USER")
-    mo_pass = env("MONGO_PASS")
+    # ---- Postgres ----
+    pg = psycopg2.connect(
+        host=env("PG_HOST"), port=int(env("PG_PORT", "5432")),
+        dbname=env("PG_DB"), user=env("PG_USER"), password=env("PG_PASS")
+    )
 
-    # connections (com waits simples)
-    def _pg_try():
-        c = psycopg2.connect(host=pg_host, port=pg_port, dbname=pg_db, user=pg_user, password=pg_pass)
-        c.close()
+    # ---- MySQL ----
+    my = pymysql.connect(
+        host=env("MYSQL_HOST"), port=int(env("MYSQL_PORT", "3306")),
+        database=env("MYSQL_DB"), user=env("MYSQL_USER"), password=env("MYSQL_PASS")
+    )
 
-    def _my_try():
-        c = pymysql.connect(host=my_host, port=my_port, user=my_user, password=my_pass, database=my_db, connect_timeout=3)
-        c.close()
-
-    def _mo_try():
-        uri = f"mongodb://{mo_user}:{mo_pass}@{mo_host}:{mo_port}/{mo_db}?authSource=admin"
-        client = MongoClient(uri, serverSelectionTimeoutMS=3000)
-        client.admin.command("ping")
-        client.close()
-
-    wait_until_ok(_pg_try, "Postgres")
-    wait_until_ok(_my_try, "MySQL")
-    wait_until_ok(_mo_try, "Mongo")
-
-    pg_conn = psycopg2.connect(host=pg_host, port=pg_port, dbname=pg_db, user=pg_user, password=pg_pass)
-    my_conn = pymysql.connect(host=my_host, port=my_port, user=my_user, password=my_pass, database=my_db)
-    mongo_uri = f"mongodb://{mo_user}:{mo_pass}@{mo_host}:{mo_port}/{mo_db}?authSource=admin"
-    mongo = MongoClient(mongo_uri)
-    mongo_db = mongo[mo_db]
+    # ---- Mongo ----
+    mongo_uri = f"mongodb://{env('MONGO_USER')}:{env('MONGO_PASS')}@{env('MONGO_HOST')}:{int(env('MONGO_PORT','27017'))}/{env('MONGO_DB')}?authSource=admin"
+    mo = MongoClient(mongo_uri)
+    mo_db = mo[env("MONGO_DB")]
 
     try:
-        ensure_target_table(pg_conn)
+        # 1) clientes (Postgres)
+        with pg.cursor() as cur:
+            cur.execute("SELECT id::int AS cliente_id, nome::text, email::text FROM clientes")
+            rows = cur.fetchall()
+        df_clients = pd.DataFrame(rows, columns=["cliente_id", "nome", "email"])
+        key = s3_key("financeiro", "clientes", ingestion_date, run_id)
+        s3.upload_fileobj(to_parquet_bytes(df_clients), bucket, key)
+        print(f"[S3] {key} ({len(df_clients)} linhas)")
 
-        clients = extract_clients_pg(pg_conn)
-        orders  = extract_orders_mysql(my_conn)
-        tickets = extract_tickets_mongo(mongo_db)
+        # 2) pedidos (MySQL)
+        with my.cursor() as cur:
+            cur.execute("SELECT id, cliente_id, valor_total, created_at FROM pedidos")
+            rows = cur.fetchall()
+        df_orders = pd.DataFrame(rows, columns=["order_id", "cliente_id", "valor_total", "created_at"])
+        # normaliza datetime -> string ISO (evita dor)
+        if "created_at" in df_orders.columns:
+            df_orders["created_at"] = df_orders["created_at"].apply(lambda x: x.isoformat() if x else None)
 
-        now = utcnow()
-        out_rows = []
+        key = s3_key("vendas", "pedidos", ingestion_date, run_id)
+        s3.upload_fileobj(to_parquet_bytes(df_orders), bucket, key)
+        print(f"[S3] {key} ({len(df_orders)} linhas)")
 
-        # faz o merge baseado em cliente_id
-        all_ids = set(clients.keys()) | set(orders.keys()) | set(tickets.keys())
+        # 3) chamados (Mongo) - guarda documento inteiro como JSON string
+        docs = list(mo_db["chamados"].find({}, {"_id": 0}))
+        for d in docs:
+            # converte datetimes (se houver)
+            for k, v in list(d.items()):
+                if isinstance(v, datetime):
+                    d[k] = v.astimezone(timezone.utc).isoformat()
 
-        for cid in sorted(all_ids):
-            c = clients.get(cid, {})
-            o = orders.get(cid, {})
-            t = tickets.get(cid, {})
+        df_tickets = pd.DataFrame([{
+            "cliente_id": d.get("cliente_id"),
+            "status": d.get("status"),
+            "document_json": json.dumps(d, ensure_ascii=False)
+        } for d in docs])
 
-            nome = c.get("nome")
-            email = c.get("email")
+        key = s3_key("suporte", "chamados", ingestion_date, run_id)
+        s3.upload_fileobj(to_parquet_bytes(df_tickets), bucket, key)
+        print(f"[S3] {key} ({len(df_tickets)} linhas)")
 
-            qtd_pedidos = o.get("qtd_pedidos", 0)
-            total_gasto = o.get("total_gasto", 0.0)
-            ultimo_pedido_em = iso_to_timestamptz(o.get("ultimo_pedido_em"))
-
-            qtd_chamados_abertos = t.get("qtd_chamados_abertos", 0)
-            ultima_interacao_em  = iso_to_timestamptz(t.get("ultima_interacao_em"))
-            suporte_raw = t.get("raw", [])
-
-            out_rows.append((
-                cid,
-                nome,
-                email,
-                int(qtd_pedidos),
-                total_gasto,
-                ultimo_pedido_em,
-                int(qtd_chamados_abertos),
-                ultima_interacao_em,
-                Json(suporte_raw),
-                now
-            ))
-
-        upsert_customer_360(pg_conn, out_rows)
-
-        print(f"[DONE] upsert customer_360: {len(out_rows)} registros")
-        # mantém vivo (pra você ver logs / container “verde”)
-        while True:
-            time.sleep(60)
+        print("[DONE] RAW enviado para o S3")
 
     finally:
-        try:
-            my_conn.close()
-        except Exception:
-            pass
-        try:
-            pg_conn.close()
-        except Exception:
-            pass
-        try:
-            mongo.close()
-        except Exception:
-            pass
+        try: pg.close()
+        except: pass
+        try: my.close()
+        except: pass
+        try: mo.close()
+        except: pass
 
 
 if __name__ == "__main__":

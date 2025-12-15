@@ -64,13 +64,17 @@ services:
   ingestor:
     image: python:3.12-slim
     container_name: ingestor
-    working_dir: /app 
+    working_dir: /app
     volumes:
-      - ./ingestor:/app 
+      - ./ingestor:/app
+      - ~/.aws:/root/.aws:ro
     command: >
       sh -c "pip install --no-cache-dir -r requirements.txt &&
-         python main.py"  
+             python main.py"
     environment:
+      AWS_REGION: us-east-1
+      S3_BUCKET: maporiginal-data-lake-dev-us-east-1-20251215
+
       # Postgres (financeiro)
       PG_HOST: sistema_financeiro
       PG_PORT: "5432"
@@ -102,6 +106,7 @@ services:
       - net_sistema_financeiro
       - net_sistema_vendas
       - net_sistema_suporte
+
 
 volumes:
   pg_finance_data:
