@@ -80,12 +80,32 @@ def upload_df(s3, bucket: str, key: str, df: pd.DataFrame) -> int:
     s3.upload_fileobj(to_parquet_bytes(df), bucket, key)
     return len(df)
 
+def delete_prefix(s3, bucket: str, prefix: str):
+    """Deleta todos os objetos sob um prefixo no S3 (em batches de 1000)."""
+    paginator = s3.get_paginator("list_objects_v2")
+    to_delete = []
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            to_delete.append({"Key": obj["Key"]})
+
+            if len(to_delete) == 1000:
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete})
+                to_delete.clear()
+
+    if to_delete:
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete})
 
 def main():
     # ---- AWS/S3 ----
     bucket = env("S3_BUCKET")
     region = env("AWS_REGION", "us-east-1")
     s3 = boto3.client("s3", region_name=region)
+
+    # !!! CUIDADO: isso apaga tudo da camada raw e curated !!!
+    delete_prefix(s3, bucket, "raw/")
+    delete_prefix(s3, bucket, "curated/")
+    delete_prefix(s3, bucket, "athena-results/")  # opcional
 
     ingestion_date = utcnow().date().isoformat()
     run_id = utcnow().strftime("%Y%m%dT%H%M%SZ")
