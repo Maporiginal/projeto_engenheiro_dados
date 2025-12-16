@@ -2,7 +2,7 @@ import time
 import boto3
 
 REGION = "us-east-1"
-DATABASE = "SEU_DATABASE"
+DATABASE = "metadata-database"
 OUTPUT = "s3://maporiginal-data-lake-dev-us-east-1-20251215/athena-results/"
 SQL = "SELECT * FROM customers LIMIT 10;"
 
