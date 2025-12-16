@@ -112,13 +112,15 @@ services:
     image: hashicorp/terraform:latest
     container_name: terraform
     working_dir: /iac
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["sleep infinity"]
     volumes:
       - ./iac:/iac
       - ~/.aws:/root/.aws:ro
     environment:
       AWS_REGION: us-east-1
       AWS_DEFAULT_REGION: us-east-1
-    command: ["sh", "-c", "sleep infinity"]
+
 
 
 volumes:
