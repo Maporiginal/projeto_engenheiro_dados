@@ -108,6 +108,18 @@ services:
       - net_sistema_vendas
       - net_sistema_suporte
 
+  terraform:
+    image: hashicorp/terraform:latest
+    container_name: terraform
+    working_dir: /iac
+    volumes:
+      - ./iac:/iac
+      - ~/.aws:/root/.aws:ro
+    environment:
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+    command: ["sh", "-c", "sleep infinity"]
+
 
 volumes:
   pg_finance_data:
