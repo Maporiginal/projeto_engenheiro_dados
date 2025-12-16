@@ -19,11 +19,11 @@ resource "aws_glue_job" "unified_job" {
   }
 
   default_arguments = {
-    "--job-language"                          = "python"
-    "--enable-metrics"                        = "true"
-    "--enable-continuous-cloudwatch-log"      = "true"
-    "--enable-spark-ui"                       = "true"
-    "--spark-event-logs-path"                 = "s3://${var.bucket_name}/sparkHistoryLogs/"
-    "--S3_BUCKET"                             = var.bucket_name
+    "--job-language"                     = "python"
+    "--enable-metrics"                   = "true"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-spark-ui"                  = "true"
+    "--spark-event-logs-path"            = "s3://${var.bucket_name}/sparkHistoryLogs/"
+    "--S3_BUCKET"                        = var.bucket_name
   }
 }

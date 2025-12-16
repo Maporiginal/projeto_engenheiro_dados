@@ -4,7 +4,7 @@ variable "aws_region" {
 }
 
 variable "bucket_name" {
-  type = string
+  type    = string
   default = "maporiginal-data-lake-dev-us-east-1-20251215"
 }
 
