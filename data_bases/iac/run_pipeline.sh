@@ -16,28 +16,63 @@ CURATED="lab-curated-crawler"
 JOB="lab-unified-job"
 BUCKET="maporiginal-data-lake-dev-us-east-1-20251215"
 
-aws glue start-crawler --name "$RAW" || true
-echo "Waiting RAW crawler..."
-while true; do
-  state=$(aws glue get-crawler --name "$RAW" --query 'Crawler.State' --output text)
-  [ "$state" = "READY" ] && break
-  sleep 10
-done
+wait_crawler() {
+  local crawler_name="$1"
+  echo "Waiting crawler: $crawler_name ..."
 
+  while true; do
+    state=$(aws glue get-crawler --name "$crawler_name" --query 'Crawler.State' --output text)
+    [ "$state" = "READY" ] && break
+    sleep 10
+  done
+
+  last=$(aws glue get-crawler --name "$crawler_name" --query 'Crawler.LastCrawl.Status' --output text)
+  echo "Crawler $crawler_name LastCrawl.Status: $last"
+
+  if [ "$last" != "SUCCEEDED" ]; then
+    echo "ERROR: crawler $crawler_name terminou sem SUCCEEDED (status=$last)"
+    exit 1
+  fi
+}
+
+wait_job() {
+  local job_name="$1"
+  local run_id="$2"
+
+  echo "Waiting Glue job $job_name run $run_id ..."
+  while true; do
+    status=$(aws glue get-job-run \
+      --job-name "$job_name" \
+      --run-id "$run_id" \
+      --query 'JobRun.JobRunState' --output text)
+
+    echo "Job status: $status"
+
+    if [ "$status" = "SUCCEEDED" ]; then
+      break
+    elif [ "$status" = "FAILED" ] || [ "$status" = "STOPPED" ] || [ "$status" = "TIMEOUT" ]; then
+      echo "ERROR: Glue job terminou com status $status"
+      exit 1
+    fi
+
+    sleep 20
+  done
+}
+
+# RAW crawler
+aws glue start-crawler --name "$RAW" || true
+wait_crawler "$RAW"
+
+# Glue job
 run_id=$(aws glue start-job-run \
   --job-name "$JOB" \
   --arguments "{\"--S3_BUCKET\":\"$BUCKET\"}" \
   --query 'JobRunId' --output text)
 
-echo "Waiting Glue job $run_id..."
-aws glue wait job-run-succeeded --job-name "$JOB" --run-id "$run_id"
+wait_job "$JOB" "$run_id"
 
+# CURATED crawler
 aws glue start-crawler --name "$CURATED" || true
-echo "Waiting CURATED crawler..."
-while true; do
-  state=$(aws glue get-crawler --name "$CURATED" --query 'Crawler.State' --output text)
-  [ "$state" = "READY" ] && break
-  sleep 10
-done
+wait_crawler "$CURATED"
 
 echo "Done: crawlers + job executed."
