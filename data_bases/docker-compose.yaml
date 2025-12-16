@@ -70,7 +70,8 @@ services:
       - ~/.aws:/root/.aws:ro
     command: >
       sh -c "pip install --no-cache-dir -r requirements.txt &&
-             python main.py"
+             python main.py &&
+             sleep infinity"
     environment:
       AWS_REGION: us-east-1
       S3_BUCKET: maporiginal-data-lake-dev-us-east-1-20251215
