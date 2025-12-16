@@ -12,6 +12,6 @@ provider "aws" {
 }
 
 resource "aws_glue_catalog_database" "metadata" {
-  name        = "metadata-database"
+  name        = "metadata-database-raw-curated"
   description = "Data Catalog para RAW/CURATED do lab"
 }
