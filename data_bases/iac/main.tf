@@ -8,10 +8,10 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-1"
+  region = var.aws_region
 }
 
 resource "aws_glue_catalog_database" "metadata" {
-  name        = "metadata-database-raw-curated"
+  name        = var.glue_database_name
   description = "Data Catalog para RAW/CURATED do lab"
 }
