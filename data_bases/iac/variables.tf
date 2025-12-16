@@ -5,6 +5,7 @@ variable "aws_region" {
 
 variable "bucket_name" {
   type = string
+  default = "maporiginal-data-lake-dev-us-east-1-20251215"
 }
 
 variable "glue_database_name" {
