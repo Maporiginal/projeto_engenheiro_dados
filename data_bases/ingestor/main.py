@@ -144,8 +144,9 @@ def main():
 
     # ---- Mongo ----
     mongo_uri = (
-                f"mongodb://{env('MONGO_ROOT_PASS')}:{env('MONGO_ROOT_PASS')}"
+                f"mongodb://{env('MONGO_USER')}:{env('MONGO_PASS')}"
                 f"@{env('MONGO_HOST')}:{int(env('MONGO_PORT','27017'))}/{env('MONGO_DB')}"
+                f"?authSource=admin" 
     )
     mo = MongoClient(mongo_uri)
     mo_db = mo[env("MONGO_DB")]
