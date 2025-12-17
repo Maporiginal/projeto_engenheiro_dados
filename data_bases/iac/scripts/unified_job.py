@@ -80,6 +80,11 @@ if not (cust_d == ord_d == тик_d and cust_r == ord_r == тик_r):
 ingestion_date = cust_d
 run_id = cust_r
 
+if hasattr(ingestion_date, "isoformat"):
+    ingestion_date = ingestion_date.isoformat()  # "YYYY-MM-DD"
+else:
+    ingestion_date = str(ingestion_date)
+    
 # --------------------
 # Validar colunas mínimas (dataset)
 # --------------------
