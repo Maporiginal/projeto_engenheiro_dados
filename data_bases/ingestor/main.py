@@ -1,35 +1,43 @@
+#!/usr/bin/env python3
+# main.py - Ingestão RAW (Postgres + MySQL + Mongo) -> S3 (Parquet) + manifest
 import os
 import io
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from decimal import Decimal
 
+import boto3
+import pandas as pd
 import psycopg2
 import pymysql
 from pymongo import MongoClient
 
-import boto3
-import pandas as pd
 
-
+# ---------------------------
+# Helpers
+# ---------------------------
 def env(name: str, default: str | None = None) -> str:
     v = os.getenv(name)
-    if not v:
+    if v is None or v == "":
         if default is None:
             raise RuntimeError(f"Variável obrigatória não definida: {name}")
         return default
     return v
 
 
-def utcnow():
+def env_first(*names: str, default: str | None = None) -> str:
+    """Retorna o primeiro env existente (não vazio) dentre os nomes informados."""
+    for n in names:
+        v = os.getenv(n)
+        if v is not None and v != "":
+            return v
+    if default is None:
+        raise RuntimeError(f"Nenhuma das variáveis foi definida: {', '.join(names)}")
+    return default
+
+
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
-
-
-def to_parquet_bytes(df: pd.DataFrame) -> io.BytesIO:
-    buf = io.BytesIO()
-    df.to_parquet(buf, index=False, engine="pyarrow")
-    buf.seek(0)
-    return buf
 
 
 def s3_key(source: str, entity: str, ingestion_date: str, run_id: str) -> str:
@@ -40,10 +48,56 @@ def manifest_key(ingestion_date: str, run_id: str) -> str:
     return f"raw/_manifests/ingestion_date={ingestion_date}/run_id={run_id}/manifest.json"
 
 
+def to_parquet_bytes(df: pd.DataFrame) -> io.BytesIO:
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False, engine="pyarrow")
+    buf.seek(0)
+    return buf
+
+
+def _fix_scalar(x):
+    if x is None:
+        return None
+    if isinstance(x, (datetime, date)):
+        if isinstance(x, datetime):
+            if x.tzinfo is None:
+                x = x.replace(tzinfo=timezone.utc)
+            return x.astimezone(timezone.utc).isoformat()
+        return x.isoformat()
+    if isinstance(x, Decimal):
+        return float(x)
+    return x
+
+
+def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for c in out.columns:
+        out[c] = out[c].map(_fix_scalar)
+    return out
+
+
+def upload_df(s3, bucket: str, key: str, df: pd.DataFrame) -> int:
+    df = normalize_df(df)
+    s3.upload_fileobj(to_parquet_bytes(df), bucket, key)
+    return len(df)
+
+
+def delete_prefix(s3, bucket: str, prefix: str) -> None:
+    paginator = s3.get_paginator("list_objects_v2")
+    batch = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            batch.append({"Key": obj["Key"]})
+            if len(batch) == 1000:
+                s3.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+                batch.clear()
+    if batch:
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": batch})
+
+
 def json_safe(obj):
-    """Converte datetime/Decimal e estruturas aninhadas para algo serializável em JSON."""
-    if isinstance(obj, datetime):
-        return obj.astimezone(timezone.utc).isoformat()
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
     if isinstance(obj, Decimal):
         return float(obj)
     if isinstance(obj, dict):
@@ -53,64 +107,24 @@ def json_safe(obj):
     return obj
 
 
-def normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-    """Normaliza tipos problemáticos para Parquet (datetime/Decimal/UUID etc.)."""
-    for col in df.columns:
-        # datetime -> ISO string
-        if df[col].dtype == "datetime64[ns]" or df[col].dtype == "datetime64[ns, UTC]":
-            df[col] = df[col].apply(lambda x: x.isoformat() if pd.notna(x) else None)
-
-        # objetos mistos: tenta converter datetimes/decimals
-        if df[col].dtype == "object":
-            def _fix(x):
-                if x is None:
-                    return None
-                if isinstance(x, datetime):
-                    return x.astimezone(timezone.utc).isoformat()
-                if isinstance(x, Decimal):
-                    return float(x)
-                return x
-            df[col] = df[col].map(_fix)
-
-    return df
-
-
-def upload_df(s3, bucket: str, key: str, df: pd.DataFrame) -> int:
-    df = normalize_df(df)
-    s3.upload_fileobj(to_parquet_bytes(df), bucket, key)
-    return len(df)
-
-def delete_prefix(s3, bucket: str, prefix: str):
-    """Deleta todos os objetos sob um prefixo no S3 (em batches de 1000)."""
-    paginator = s3.get_paginator("list_objects_v2")
-    to_delete = []
-
-    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-        for obj in page.get("Contents", []):
-            to_delete.append({"Key": obj["Key"]})
-
-            if len(to_delete) == 1000:
-                s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete})
-                to_delete.clear()
-
-    if to_delete:
-        s3.delete_objects(Bucket=bucket, Delete={"Objects": to_delete})
-
+# ---------------------------
+# Main
+# ---------------------------
 def main():
-    # ---- AWS/S3 ----
+    # ---- AWS / S3 ----
     bucket = env("S3_BUCKET")
     region = env("AWS_REGION", "us-east-1")
     s3 = boto3.client("s3", region_name=region)
 
-    # !!! CUIDADO: isso apaga tudo da camada raw e curated !!!
-    delete_prefix(s3, bucket, "raw/")
-    delete_prefix(s3, bucket, "curated/")
-    delete_prefix(s3, bucket, "athena-results/")  # opcional
+    if env("CLEANUP", "false").lower() == "true":
+        delete_prefix(s3, bucket, "raw/")
+        delete_prefix(s3, bucket, "curated/")
+        delete_prefix(s3, bucket, "athena-results/")
 
     ingestion_date = utcnow().date().isoformat()
     run_id = utcnow().strftime("%Y%m%dT%H%M%SZ")
 
-    # ---- Postgres ---- (dentro da rede docker: porta 5432)
+    # ---- Postgres ----
     pg = psycopg2.connect(
         host=env("PG_HOST"),
         port=int(env("PG_PORT", "5432")),
@@ -119,7 +133,7 @@ def main():
         password=env("PG_PASS"),
     )
 
-    # ---- MySQL ---- (dentro da rede docker: porta 3306)
+    # ---- MySQL ----
     my = pymysql.connect(
         host=env("MYSQL_HOST"),
         port=int(env("MYSQL_PORT", "3306")),
@@ -130,8 +144,8 @@ def main():
 
     # ---- Mongo ----
     mongo_uri = (
-        f"mongodb://{env('MONGO_USER')}:{env('MONGO_PASS')}"
-        f"@{env('MONGO_HOST')}:{int(env('MONGO_PORT','27017'))}/{env('MONGO_DB')}"
+                f"mongodb://{env('MONGO_ROOT_PASS')}:{env('MONGO_ROOT_PASS')}"
+                f"@{env('MONGO_HOST')}:{int(env('MONGO_PORT','27017'))}/{env('MONGO_DB')}"
     )
     mo = MongoClient(mongo_uri)
     mo_db = mo[env("MONGO_DB")]
@@ -150,18 +164,23 @@ def main():
         # POSTGRES: financeiro.customers
         # -------------------------
         with pg.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     customer_id::text AS customer_id,
                     full_name,
                     email,
-                    created_at
+                    phone,
+                    city,
+                    state,
+                    created_at::text AS created_at
                 FROM financeiro.customers
                 ORDER BY created_at
-            """)
+                """
+            )
             rows = cur.fetchall()
 
-        df = pd.DataFrame(rows, columns=["customer_id", "full_name", "email", "created_at"])
+        df = pd.DataFrame(rows, columns=["customer_id", "full_name", "email", "phone", "city", "state", "created_at"])
         key = s3_key("financeiro", "customers", ingestion_date, run_id)
         n = upload_df(s3, bucket, key, df)
         print(f"[S3] {key} ({n} linhas)")
@@ -171,20 +190,22 @@ def main():
         # POSTGRES: financeiro.ledger
         # -------------------------
         with pg.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     ledger_id::text AS ledger_id,
                     customer_id::text AS customer_id,
-                    kind,
+                    entry_ts::text AS entry_ts,
+                    entry_type,
                     amount,
-                    ref,
-                    created_at
+                    description
                 FROM financeiro.ledger
-                ORDER BY created_at
-            """)
+                ORDER BY entry_ts
+                """
+            )
             rows = cur.fetchall()
 
-        df = pd.DataFrame(rows, columns=["ledger_id", "customer_id", "kind", "amount", "ref", "created_at"])
+        df = pd.DataFrame(rows, columns=["ledger_id", "customer_id", "entry_ts", "entry_type", "amount", "description"])
         key = s3_key("financeiro", "ledger", ingestion_date, run_id)
         n = upload_df(s3, bucket, key, df)
         print(f"[S3] {key} ({n} linhas)")
@@ -194,19 +215,27 @@ def main():
         # MYSQL: vendas.orders
         # -------------------------
         with my.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     order_id,
                     customer_id,
+                    order_ts,
                     status,
                     total,
-                    created_at
+                    currency,
+                    payment_method,
+                    sales_channel
                 FROM orders
-                ORDER BY created_at
-            """)
+                ORDER BY order_ts
+                """
+            )
             rows = cur.fetchall()
 
-        df = pd.DataFrame(rows, columns=["order_id", "customer_id", "status", "total", "created_at"])
+        df = pd.DataFrame(
+            rows,
+            columns=["order_id", "customer_id", "order_ts", "status", "total", "currency", "payment_method", "sales_channel"],
+        )
         key = s3_key("vendas", "orders", ingestion_date, run_id)
         n = upload_df(s3, bucket, key, df)
         print(f"[S3] {key} ({n} linhas)")
@@ -216,42 +245,61 @@ def main():
         # MYSQL: vendas.order_items
         # -------------------------
         with my.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT
                     order_item_id,
                     order_id,
                     sku,
-                    qty,
-                    unit_price
+                    product_name,
+                    quantity,
+                    unit_price,
+                    line_total
                 FROM order_items
                 ORDER BY order_item_id
-            """)
+                """
+            )
             rows = cur.fetchall()
 
-        df = pd.DataFrame(rows, columns=["order_item_id", "order_id", "sku", "qty", "unit_price"])
+        df = pd.DataFrame(
+            rows,
+            columns=["order_item_id", "order_id", "sku", "product_name", "quantity", "unit_price", "line_total"],
+        )
         key = s3_key("vendas", "order_items", ingestion_date, run_id)
         n = upload_df(s3, bucket, key, df)
         print(f"[S3] {key} ({n} linhas)")
         manifest["datasets"].append({"source": "vendas", "entity": "order_items", "rows": n, "key": key})
 
         # -------------------------
-        # MONGO: suporte.tickets
+        # MONGO: suporte.tickets (simplificado)
+        # - order_id vem de related.order_id
+        # - events é array -> events_json (string)
         # -------------------------
         docs = list(mo_db["tickets"].find({}, {"_id": 0}))
 
-        # grava “raw” do documento inteiro (inclui interactions)
         out = []
         for d in docs:
             d = json_safe(d)
-            out.append({
-                "ticket_id": d.get("ticket_id"),
-                "customer_id": d.get("customer_id"),
-                "status": d.get("status"),
-                "created_at": d.get("created_at"),
-                "document_json": json.dumps(d, ensure_ascii=False),
-            })
+            related = d.get("related") or {}
+            events = d.get("events") or []
 
-        df = pd.DataFrame(out, columns=["ticket_id", "customer_id", "status", "created_at", "document_json"])
+            out.append(
+                {
+                    "ticket_id": d.get("ticket_id"),
+                    "customer_id": d.get("customer_id"),
+                    "order_id": related.get("order_id"),
+                    "status": d.get("status"),
+                    "created_at": d.get("created_at"),
+                    "updated_at": d.get("updated_at"),
+                    "events_json": json.dumps(events, ensure_ascii=False),
+                    "document_json": json.dumps(d, ensure_ascii=False),
+                }
+            )
+
+        df = pd.DataFrame(
+            out,
+            columns=["ticket_id", "customer_id", "order_id", "status", "created_at", "updated_at", "events_json", "document_json"],
+        )
         key = s3_key("suporte", "tickets", ingestion_date, run_id)
         n = upload_df(s3, bucket, key, df)
         print(f"[S3] {key} ({n} linhas)")
@@ -268,7 +316,6 @@ def main():
             ContentType="application/json",
         )
         print(f"[S3] {mkey} (manifest)")
-
         print("[DONE] RAW enviado para o S3")
 
     finally:
