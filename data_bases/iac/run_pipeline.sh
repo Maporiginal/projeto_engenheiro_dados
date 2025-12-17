@@ -76,3 +76,19 @@ aws glue start-crawler --name "$CURATED" || true
 wait_crawler "$CURATED"
 
 echo "Done: crawlers + job executed."
+
+# -------- Testar API (Lambda + API Gateway) --------
+API_URL=$(docker exec -it terraform sh -lc 'cd /iac && terraform output -raw clientes_api_base_url' | tr -d '\r')
+echo "API URL: $API_URL"
+
+# teste básico (troque o nome se quiser)
+HTTP_CODE=$(curl -s -o /tmp/api_out.json -w "%{http_code}" "$API_URL/clientes?nome=Carla")
+
+echo "API HTTP CODE: $HTTP_CODE"
+cat /tmp/api_out.json
+echo ""
+
+if [ "$HTTP_CODE" != "200" ]; then
+  echo "ERROR: API não respondeu 200"
+  exit 1
+fi
