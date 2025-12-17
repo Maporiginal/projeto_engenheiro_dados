@@ -32,3 +32,5 @@ terraform.tfstate.*
 crash.log
 *.tfvars
 *.tfvars.json
+**/lambda/*.zip
+**/.terraform.lock.hcl
