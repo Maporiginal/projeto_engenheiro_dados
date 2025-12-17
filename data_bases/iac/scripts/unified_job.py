@@ -7,6 +7,7 @@ from pyspark.sql import functions as F
 from awsglue.context import GlueContext
 from awsglue.job import Job
 from awsglue.utils import getResolvedOptions
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType
 
 args = getResolvedOptions(sys.argv, ["JOB_NAME", "S3_BUCKET"])
 bucket = args["S3_BUCKET"]
@@ -14,6 +15,7 @@ bucket = args["S3_BUCKET"]
 sc = SparkContext.getOrCreate()
 glueContext = GlueContext(sc)
 spark = glueContext.spark_session
+spark.conf.set("spark.sql.parquet.mergeSchema", "false")
 
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
@@ -39,7 +41,8 @@ tickets   = read_parquet("raw/suporte/tickets/")
 # ---------- Validar colunas mínimas ----------
 require_cols(customers, ["customer_id", "full_name"], "customers")
 require_cols(orders, ["customer_id", "total"], "orders")
-require_cols(tickets, ["customer_id", "created_at"], "tickets")
+require_cols(tickets, ["customer_id", "created_at", "updated_at", "events_json"], "tickets")
+
 
 # ---------- Normalizar tipos ----------
 customers = customers.select("customer_id", "full_name") \
@@ -53,7 +56,7 @@ tickets_sel = tickets.select(
     "customer_id",
     "created_at",
     "updated_at",
-    "events"
+    "events_json"
 ).withColumn("customer_id", F.col("customer_id").cast("string"))
 
 # ---------- Agregado MySQL (orders) ----------
@@ -65,21 +68,31 @@ orders_agg = (
           )
 )
 
+events_schema = ArrayType(StructType([
+    StructField("ts",   StringType(), True),
+    StructField("type", StringType(), True),
+    StructField("by",   StringType(), True),
+    StructField("text", StringType(), True),
+]))
+
 # ---------- Agregado Mongo (tickets) ----------
 tickets_base = (
     tickets_sel
     .withColumn("created_at_ts", F.to_timestamp(F.col("created_at"), ISO_Z))
     .withColumn("updated_at_ts", F.to_timestamp(F.col("updated_at"), ISO_Z))
+    .withColumn("events_arr", F.from_json(F.col("events_json"), events_schema))
 )
+
 
 # Maior timestamp dentro de events.ts (se existir)
 events_max = (
     tickets_base
-    .withColumn("ev", F.explode_outer("events"))
+    .withColumn("ev", F.explode_outer("events_arr"))
     .withColumn("event_ts", F.to_timestamp(F.col("ev.ts"), ISO_Z))
     .groupBy("customer_id")
     .agg(F.max("event_ts").alias("max_event_ts"))
 )
+
 
 tickets_agg = (
     tickets_base.groupBy("customer_id")

@@ -4,10 +4,13 @@
 
 CREATE SCHEMA IF NOT EXISTS financeiro;
 
+-- Para garantir a mudança de datatype (ambiente de laboratório):
+DROP TABLE IF EXISTS financeiro.ledger;
+
 CREATE TABLE IF NOT EXISTS financeiro.ledger (
   ledger_id   SERIAL PRIMARY KEY,
   customer_id UUID NOT NULL,
-  entry_ts    TIMESTAMPTZ NOT NULL,
+  entry_ts    TEXT NOT NULL,
   entry_type  VARCHAR(10) NOT NULL CHECK (entry_type IN ('CREDIT','DEBIT')),
   amount      NUMERIC(12,2) NOT NULL CHECK (amount >= 0),
   description VARCHAR(255)

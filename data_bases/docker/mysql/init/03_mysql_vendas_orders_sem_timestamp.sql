@@ -4,10 +4,14 @@
 CREATE DATABASE IF NOT EXISTS vendas;
 USE vendas;
 
+-- Para garantir a mudança de datatype (ambiente de laboratório):
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS orders;
+
 CREATE TABLE IF NOT EXISTS orders (
   order_id        INT NOT NULL AUTO_INCREMENT,
   customer_id     CHAR(36) NOT NULL,
-  order_ts        DATETIME NOT NULL,
+  order_ts        VARCHAR(30) NOT NULL,
   status          VARCHAR(20) NOT NULL,
   total           DECIMAL(12,2) NOT NULL,
   currency        CHAR(3) NOT NULL DEFAULT 'BRL',
