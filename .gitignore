@@ -10,6 +10,21 @@ venv/
 .env
 
 # --- Terraform (estado/local cache) ---
+**/.terraform/*
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform vars (se você tiver)
+*.tfvars
+*.tfvars.json
+
+# Logs / temporários
+*.log
+.DS_Store
+
 .terraform/
 terraform.tfstate
 terraform.tfstate.*
