@@ -26,9 +26,6 @@ spark.conf.set("spark.sql.parquet.mergeSchema", "false")
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args)
 
-ingestion_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-
 ISO_Z = "yyyy-MM-dd'T'HH:mm:ssX"  # ex: 2025-07-05T02:00:00Z
 
 
@@ -39,40 +36,74 @@ def read_parquet(prefix: str):
 def require_cols(df, cols, name):
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise Exception(f"[ERRO] {name} sem colunas obrigatórias: {missing}. Colunas atuais: {df.columns}")
+        raise Exception(
+            f"[ERRO] {name} sem colunas obrigatórias: {missing}. Colunas atuais: {df.columns}"
+        )
+
+
+def read_latest(prefix: str, name: str):
+    """
+    Lê o RAW do prefix e filtra SOMENTE:
+      - maior ingestion_date
+      - e, dentro dele, maior run_id
+    Retorna (df_filtrado, ingestion_date, run_id)
+    """
+    df = read_parquet(prefix)
+
+    # precisa ter os metadados do main
+    require_cols(df, ["ingestion_date", "run_id"], name)
+
+    last_d = df.agg(F.max("ingestion_date").alias("d")).collect()[0]["d"]
+    df_d = df.filter(F.col("ingestion_date") == F.lit(last_d))
+
+    last_r = df_d.agg(F.max("run_id").alias("r")).collect()[0]["r"]
+    df_dr = df_d.filter(F.col("run_id") == F.lit(last_r))
+
+    return df_dr, last_d, last_r
 
 
 # --------------------
-# Ler RAW
+# Ler RAW (somente último snapshot)
 # --------------------
-customers = read_parquet("raw/financeiro/customers/")
-orders    = read_parquet("raw/vendas/orders/")
-tickets   = read_parquet("raw/suporte/tickets/")
+customers_raw, cust_d, cust_r = read_latest("raw/financeiro/customers/", "customers")
+orders_raw,    ord_d,  ord_r  = read_latest("raw/vendas/orders/", "orders")
+tickets_raw,   тик_d,  тик_r  = read_latest("raw/suporte/tickets/", "tickets")
+
+# (opcional) sanity: garante que veio do mesmo run do main
+# se preferir, só escolhe o "maior" entre eles e segue.
+if not (cust_d == ord_d == тик_d and cust_r == ord_r == тик_r):
+    raise Exception(
+        "[ERRO] Snapshots RAW não estão alinhados (ingestion_date/run_id diferentes): "
+        f"customers={cust_d}/{cust_r} | orders={ord_d}/{ord_r} | tickets={тик_d}/{тик_r}"
+    )
+
+ingestion_date = cust_d
+run_id = cust_r
 
 # --------------------
-# Validar colunas mínimas
+# Validar colunas mínimas (dataset)
 # --------------------
-require_cols(customers, ["customer_id", "full_name"], "customers")
-require_cols(orders, ["customer_id", "total"], "orders")
-require_cols(tickets, ["customer_id", "created_at", "updated_at", "events_json"], "tickets")
+require_cols(customers_raw, ["customer_id", "full_name"], "customers")
+require_cols(orders_raw, ["customer_id", "total"], "orders")
+require_cols(tickets_raw, ["customer_id", "created_at", "updated_at", "events_json"], "tickets")
 
 # --------------------
 # Normalizar tipos (join key como string)
 # --------------------
 customers = (
-    customers.select("customer_id", "full_name")
-             .withColumn("customer_id", F.col("customer_id").cast("string"))
+    customers_raw.select("customer_id", "full_name")
+                 .withColumn("customer_id", F.col("customer_id").cast("string"))
 )
 
 orders = (
-    orders.select("customer_id", "total")
-          .withColumn("customer_id", F.col("customer_id").cast("string"))
-          .withColumn("total_d", F.col("total").cast("double"))
+    orders_raw.select("customer_id", "total")
+              .withColumn("customer_id", F.col("customer_id").cast("string"))
+              .withColumn("total_d", F.col("total").cast("double"))
 )
 
 tickets_sel = (
-    tickets.select("customer_id", "created_at", "updated_at", "events_json")
-           .withColumn("customer_id", F.col("customer_id").cast("string"))
+    tickets_raw.select("customer_id", "created_at", "updated_at", "events_json")
+               .withColumn("customer_id", F.col("customer_id").cast("string"))
 )
 
 # --------------------
@@ -103,7 +134,6 @@ tickets_base = (
     .withColumn("events_arr", F.from_json(F.col("events_json"), events_schema))
 )
 
-# max timestamp dentro de events.ts (se existir)
 events_max = (
     tickets_base
     .withColumn("ev", F.explode_outer("events_arr"))
@@ -177,5 +207,5 @@ final_df = (
 out_base = f"s3://{bucket}/curated/clientes_unificados/"
 final_df.write.mode("overwrite").partitionBy("ano", "mes").parquet(out_base)
 
-print(f"[OK] Curated gerado em: {out_base} (particionado por ano/mes)")
+print(f"[OK] Curated gerado em: {out_base} (particionado por ano/mes) | ingestion_date={ingestion_date} run_id={run_id}")
 job.commit()
