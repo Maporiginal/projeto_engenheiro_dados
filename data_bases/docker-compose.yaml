@@ -114,17 +114,17 @@ services:
     entrypoint: ["sleep"]
     command: ["infinity"]
 
-    volumes:
-      - ./iac_state:/state
+    #volumes:
+     # - ./iac_state:/state
 
     environment:
       AWS_REGION: ${AWS_REGION}
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-      TF_DATA_DIR: /state/.terraform
-      TF_CLI_ARGS_plan: "-state=/state/terraform.tfstate"
-      TF_CLI_ARGS_apply: "-state=/state/terraform.tfstate"
+     # TF_DATA_DIR: /state/.terraform
+     # TF_CLI_ARGS_plan: "-state=/state/terraform.tfstate"
+     # TF_CLI_ARGS_apply: "-state=/state/terraform.tfstate"
  
 
 volumes:

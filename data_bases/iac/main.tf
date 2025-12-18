@@ -15,3 +15,4 @@ resource "aws_glue_catalog_database" "metadata" {
   name        = var.glue_database_name
   description = "Data Catalog para RAW/CURATED do lab"
 }
+

@@ -21,9 +21,6 @@ resource "aws_iam_role" "lambda_clientes_role" {
 
 # ANEXA POLICY GLOBAL NA ROLE DO LAMBDA 
 # (esse data precisa existir UMA vez no diretório. Se já existe em outro .tf, remova daqui.)
-data "aws_iam_policy" "lab_global_policy" {
-  name = "lab-ingestor-s3-raw-curated"
-}
 
 resource "aws_iam_role_policy_attachment" "lambda_global_policy" {
   role       = aws_iam_role.lambda_clientes_role.name
