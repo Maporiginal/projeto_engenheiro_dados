@@ -1,11 +1,11 @@
-# ========= LAMBDA ZIP =========
+# LAMBDA ZIP 
 data "archive_file" "clientes_api_zip" {
   type        = "zip"
   source_file = "${path.module}/lambda/clientes_api.py"
   output_path = "${path.module}/lambda/clientes_api.zip"
 }
 
-# ========= IAM ROLE (Lambda) =========
+# IAM ROLE (Lambda) 
 resource "aws_iam_role" "lambda_clientes_role" {
   name = "lab-lambda-clientes-role"
 
@@ -19,60 +19,18 @@ resource "aws_iam_role" "lambda_clientes_role" {
   })
 }
 
-resource "aws_iam_role_policy" "lambda_clientes_policy" {
-  name = "lab-lambda-clientes-policy"
-  role = aws_iam_role.lambda_clientes_role.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      # CloudWatch Logs
-      {
-        Effect = "Allow"
-        Action = [
-          "glue:*"
-        ]
-        Resource = "*"
-      },
-
-      # Athena
-      {
-        Effect = "Allow"
-        Action = [
-          "athena:StartQueryExecution",
-          "athena:GetQueryExecution",
-          "athena:GetQueryResults"
-        ]
-        Resource = "*"
-      },
-
-      # S3 output do Athena (obrigatório para gravar resultado)
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:GetBucketLocation",
-          "s3:ListBucket"
-        ]
-        Resource = [
-          "arn:aws:s3:::${var.bucket_name}"
-        ]
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:DeleteObject"
-        ]
-        Resource = [
-          "arn:aws:s3:::${var.bucket_name}/athena-results/*"
-        ]
-      }
-    ]
-  })
+# ANEXA POLICY GLOBAL NA ROLE DO LAMBDA 
+# (esse data precisa existir UMA vez no diretório. Se já existe em outro .tf, remova daqui.)
+data "aws_iam_policy" "lab_global_policy" {
+  name = "lab-ingestor-s3-raw-curated"
 }
 
-# ========= LAMBDA FUNCTION =========
+resource "aws_iam_role_policy_attachment" "lambda_global_policy" {
+  role       = aws_iam_role.lambda_clientes_role.name
+  policy_arn = data.aws_iam_policy.lab_global_policy.arn
+}
+
+# LAMBDA FUNCTION
 resource "aws_lambda_function" "clientes_api" {
   function_name = "lab-clientes-api"
   role          = aws_iam_role.lambda_clientes_role.arn
@@ -94,7 +52,7 @@ resource "aws_lambda_function" "clientes_api" {
   }
 }
 
-# ========= API GATEWAY HTTP API =========
+# API GATEWAY HTTP API
 resource "aws_apigatewayv2_api" "clientes_http_api" {
   name          = "lab-clientes-http-api"
   protocol_type = "HTTP"
