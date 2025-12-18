@@ -2,6 +2,7 @@ services:
   sistema_financeiro:
     image: postgres:16
     container_name: sistema_financeiro
+    user: "0:0"
     environment:
       POSTGRES_USER: ${PG_SUPERUSER}
       POSTGRES_PASSWORD: ${PG_SUPERPASS}
@@ -22,6 +23,7 @@ services:
   sistema_vendas:
     image: mysql:8.4
     container_name: sistema_vendas
+    user: "0:0"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: vendas
@@ -44,6 +46,7 @@ services:
   sistema_suporte:
     image: mongo:7
     container_name: sistema_suporte
+    user: "0:0"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
@@ -64,6 +67,7 @@ services:
   ingestor:
     image: python:3.12-slim
     container_name: ingestor
+    user: "0:0"
     working_dir: /
     volumes:
       - ./ingestor:/app
@@ -113,6 +117,7 @@ services:
   terraform:
     image: hashicorp/terraform:latest
     container_name: terraform
+    user: "0:0"
     working_dir: /iac
     entrypoint: ["/bin/sh", "-c"]
     command: ["sleep infinity"]
