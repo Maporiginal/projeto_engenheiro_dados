@@ -3,7 +3,6 @@ services:
     build:
       context: ./docker/postgres
     container_name: sistema_financeiro
-    user: "0:0"
     environment:
       POSTGRES_USER: ${PG_SUPERUSER}
       POSTGRES_PASSWORD: ${PG_SUPERPASS}
@@ -24,7 +23,6 @@ services:
     build:
       context: ./docker/mysql
     container_name: sistema_vendas
-    user: "0:0"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: vendas
@@ -46,7 +44,6 @@ services:
     build:
       context: ./docker/mongo
     container_name: sistema_suporte
-    user: "0:0"
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
@@ -64,22 +61,17 @@ services:
       retries: 30
 
   ingestor:
-    image: python:3.12-slim
+    build:
+      context: ./ingestor
     container_name: ingestor
-    user: "0:0"
-    working_dir: /
     volumes:
-      - ./ingestor:/app
       - ${HOME}/.aws:/root/.aws:ro
-    command: >
-      sh -c "cd /app &&
-             pip install --no-cache-dir -r requirements.txt &&
-             python main.py &&
-             sleep infinity"
     environment:
-      AWS_REGION: us-east-1
-      S3_BUCKET: maporiginal-data-lake-dev-us-east-1-20251215
-
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      S3_BUCKET: ${S3_BUCKET}
       # Postgres (financeiro)
       PG_HOST: sistema_financeiro
       PG_PORT: "5432"
@@ -112,20 +104,28 @@ services:
       - net_sistema_financeiro
       - net_sistema_vendas
       - net_sistema_suporte
-
+ 
   terraform:
-    image: hashicorp/terraform:latest
+    build:
+      context: ./iac
+      dockerfile: Dockerfile
     container_name: terraform
-    user: "0:0"
     working_dir: /iac
-    entrypoint: ["/bin/sh", "-c"]
-    command: ["sleep infinity"]
+    entrypoint: ["sleep"]
+    command: ["infinity"]
+
     volumes:
-      - ./iac:/iac
-      - ${HOME}/.aws:/root/.aws:ro
+      - ./iac_state:/state
+
     environment:
-      AWS_REGION: us-east-1
-      AWS_DEFAULT_REGION: us-east-1
+      AWS_REGION: ${AWS_REGION}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      TF_DATA_DIR: /state/.terraform
+      TF_CLI_ARGS_plan: "-state=/state/terraform.tfstate"
+      TF_CLI_ARGS_apply: "-state=/state/terraform.tfstate"
+ 
 
 volumes:
   pg_finance_data:
