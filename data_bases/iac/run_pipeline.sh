@@ -28,6 +28,8 @@ set +a
 TERRAFORM_CONTAINER="${TERRAFORM_CONTAINER:-terraform}"
 TF_IAC_DIR="${TF_IAC_DIR:-/iac}"
 
+docker exec -it ingestor python main.py
+
 # --- helpers: roda terraform dentro do container ---
 tf() {
   docker exec -i \
