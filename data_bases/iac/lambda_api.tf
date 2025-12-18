@@ -19,6 +19,20 @@ resource "aws_iam_role" "lambda_clientes_role" {
   })
 }
 
+# Logs no CloudWatch (bom pra debug)
+resource "aws_iam_role_policy_attachment" "lambda_basic_logs" {
+  role       = aws_iam_role.lambda_clientes_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# FULL ADMIN (temporário, só pra fazer funcionar rápido)
+resource "aws_iam_role_policy_attachment" "lambda_admin" {
+  role       = aws_iam_role.lambda_clientes_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+
+
 # ANEXA POLICY GLOBAL NA ROLE DO LAMBDA 
 # (esse data precisa existir UMA vez no diretório. Se já existe em outro .tf, remova daqui.)
 
@@ -58,7 +72,7 @@ resource "aws_apigatewayv2_api" "clientes_http_api" {
 resource "aws_apigatewayv2_integration" "clientes_integration" {
   api_id                 = aws_apigatewayv2_api.clientes_http_api.id
   integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.clientes_api.arn
+  integration_uri        = aws_lambda_function.clientes_api.invoke_arn
   payload_format_version = "2.0"
 }
 
