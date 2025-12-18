@@ -1,6 +1,7 @@
 services:
   sistema_financeiro:
-    image: postgres:16
+    build:
+      context: ./docker/postgres
     container_name: sistema_financeiro
     user: "0:0"
     environment:
@@ -11,7 +12,6 @@ services:
       - "15432:5432"
     volumes:
       - pg_finance_data:/var/lib/postgresql/data
-      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     networks:
       - net_sistema_financeiro
     healthcheck:
@@ -21,7 +21,8 @@ services:
       retries: 20
 
   sistema_vendas:
-    image: mysql:8.4
+    build:
+      context: ./docker/mysql
     container_name: sistema_vendas
     user: "0:0"
     environment:
@@ -31,10 +32,8 @@ services:
       MYSQL_PASSWORD: ${MYSQL_APP_PASS}
     ports:
       - "13306:3306"
-    #command: ["--default-authentication-plugin=mysql_native_password"]
     volumes:
       - mysql_sales_data:/var/lib/mysql
-      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
     networks:
       - net_sistema_vendas
     healthcheck:
@@ -44,7 +43,8 @@ services:
       retries: 30
 
   sistema_suporte:
-    image: mongo:7
+    build:
+      context: ./docker/mongo
     container_name: sistema_suporte
     user: "0:0"
     environment:
@@ -55,7 +55,6 @@ services:
       - "27017:27017"
     volumes:
       - mongo_support_data:/data/db
-      - ./docker/mongo/init:/docker-entrypoint-initdb.d:ro
     networks:
       - net_sistema_suporte
     healthcheck:
@@ -71,9 +70,9 @@ services:
     working_dir: /
     volumes:
       - ./ingestor:/app
-      - ~/.aws:/root/.aws:ro
+      - ${HOME}/.aws:/root/.aws:ro
     command: >
-      sh -c "cd /app && 
+      sh -c "cd /app &&
              pip install --no-cache-dir -r requirements.txt &&
              python main.py &&
              sleep infinity"
@@ -123,12 +122,10 @@ services:
     command: ["sleep infinity"]
     volumes:
       - ./iac:/iac
-      - ~/.aws:/root/.aws:ro
+      - ${HOME}/.aws:/root/.aws:ro
     environment:
       AWS_REGION: us-east-1
       AWS_DEFAULT_REGION: us-east-1
-
-
 
 volumes:
   pg_finance_data:
